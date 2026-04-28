@@ -65,5 +65,5 @@ GitHub Actions will build macOS + Windows and attach zips to the release.
 
 ## Usage with obs-web
 
-Use the included `index.html` as your obs-web frontend. It already uses the
+Use the included `www/index.html` as your obs-web frontend. It already uses the
 `OutputScreenShot` vendor name and `getOutputScreenShot` message.

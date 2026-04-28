@@ -111,10 +111,7 @@ static std::vector<uint8_t> deflate_store(const uint8_t *data, size_t len)
     }
 
     uint32_t adl = adler32(data, len);
-    write_u32_be(out, adl); // adler32 big-endian
-    // Fix: adler32 is appended big-endian but we used write_u32_be which
-    // already pushes 4 bytes — remove the duplicate and redo correctly.
-    // (write_u32_be pushes onto `out`, so the above line is correct.)
+    write_u32_be(out, adl);
     return out;
 }
 

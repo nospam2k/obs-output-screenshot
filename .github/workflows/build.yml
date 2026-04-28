@@ -1,0 +1,187 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+    branches: [main]
+
+env:
+  PLUGIN_NAME: obs-output-screenshot
+  OBS_VERSION: 31.0.0
+  OBS_DEPS_TAG: 2024-09-12
+
+jobs:
+  # ── macOS (universal: arm64 + x86_64) ─────────────────────────────────────
+  macos:
+    name: macOS (universal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install cmake ninja
+
+      - name: Cache OBS build
+        id: cache-obs
+        uses: actions/cache@v4
+        with:
+          path: obs-install
+          key: obs-macos-${{ env.OBS_VERSION }}-${{ env.OBS_DEPS_TAG }}
+
+      - name: Download obs-deps (prebuilt FFmpeg, jansson, etc.)
+        if: steps.cache-obs.outputs.cache-hit != 'true'
+        run: |
+          mkdir obs-deps
+          curl -sSL \
+            "https://github.com/obsproject/obs-deps/releases/download/${{ env.OBS_DEPS_TAG }}/macos-deps-${{ env.OBS_DEPS_TAG }}-universal.tar.xz" \
+            | tar xJf - -C obs-deps/
+
+      - name: Download OBS Studio source
+        if: steps.cache-obs.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL \
+            "https://github.com/obsproject/obs-studio/archive/refs/tags/${{ env.OBS_VERSION }}.tar.gz" \
+            | tar xzf -
+
+      - name: Build libobs
+        if: steps.cache-obs.outputs.cache-hit != 'true'
+        run: |
+          cmake -S "obs-studio-${{ env.OBS_VERSION }}" -B obs-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps" \
+            -DENABLE_PLUGINS=OFF \
+            -DENABLE_UI=OFF \
+            -DENABLE_SCRIPTING=OFF \
+            -DENABLE_BROWSER=OFF \
+            -DENABLE_AJA=OFF \
+            -DENABLE_VST=OFF \
+            -DENABLE_VLC=OFF \
+            -DENABLE_WEBSOCKET=OFF
+          cmake --build obs-build
+          cmake --install obs-build --prefix "${{ github.workspace }}/obs-install"
+
+      - name: Locate libobs cmake config
+        run: |
+          LIBOBS_DIR=$(find obs-install -name "libobsConfig.cmake" -exec dirname {} \; | head -1)
+          echo "LIBOBS_DIR=${LIBOBS_DIR}" >> $GITHUB_ENV
+
+      - name: Build plugin
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -Dlibobs_DIR="${{ env.LIBOBS_DIR }}"
+          cmake --build build
+
+      - name: Package
+        run: |
+          mkdir -p "package/${{ env.PLUGIN_NAME }}/bin"
+          cp "build/${{ env.PLUGIN_NAME }}.dylib" "package/${{ env.PLUGIN_NAME }}/bin/"
+          zip -r "${{ env.PLUGIN_NAME }}-macos.zip" package/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-macos
+          path: ${{ env.PLUGIN_NAME }}-macos.zip
+
+  # ── Windows (x64) ─────────────────────────────────────────────────────────
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache OBS build
+        id: cache-obs
+        uses: actions/cache@v4
+        with:
+          path: obs-install
+          key: obs-windows-${{ env.OBS_VERSION }}-${{ env.OBS_DEPS_TAG }}
+
+      - name: Download obs-deps (prebuilt FFmpeg, jansson, etc.)
+        if: steps.cache-obs.outputs.cache-hit != 'true'
+        run: |
+          Invoke-WebRequest `
+            "https://github.com/obsproject/obs-deps/releases/download/$env:OBS_DEPS_TAG/windows-deps-$env:OBS_DEPS_TAG-x64.zip" `
+            -OutFile obs-deps.zip
+          Expand-Archive obs-deps.zip -DestinationPath obs-deps
+        shell: pwsh
+
+      - name: Download OBS Studio source
+        if: steps.cache-obs.outputs.cache-hit != 'true'
+        run: |
+          Invoke-WebRequest `
+            "https://github.com/obsproject/obs-studio/archive/refs/tags/$env:OBS_VERSION.zip" `
+            -OutFile obs-src.zip
+          Expand-Archive obs-src.zip -DestinationPath .
+          Rename-Item "obs-studio-$env:OBS_VERSION" obs-studio
+        shell: pwsh
+
+      - name: Build libobs
+        if: steps.cache-obs.outputs.cache-hit != 'true'
+        run: |
+          cmake -S obs-studio -B obs-build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}\obs-deps" `
+            -DENABLE_PLUGINS=OFF `
+            -DENABLE_UI=OFF `
+            -DENABLE_SCRIPTING=OFF `
+            -DENABLE_BROWSER=OFF `
+            -DENABLE_AJA=OFF `
+            -DENABLE_VST=OFF `
+            -DENABLE_VLC=OFF `
+            -DENABLE_WEBSOCKET=OFF
+          cmake --build obs-build --config RelWithDebInfo
+          cmake --install obs-build --prefix "${{ github.workspace }}\obs-install" --config RelWithDebInfo
+        shell: pwsh
+
+      - name: Locate libobs cmake config
+        run: |
+          $cfg = Get-ChildItem -Path obs-install -Recurse -Filter "libobsConfig.cmake" | Select-Object -First 1
+          "LIBOBS_DIR=$($cfg.DirectoryName)" | Out-File -Append $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Build plugin
+        run: |
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -Dlibobs_DIR="${{ env.LIBOBS_DIR }}"
+          cmake --build build --config RelWithDebInfo
+        shell: pwsh
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force "package\obs-plugins\64bit"
+          Copy-Item "build\RelWithDebInfo\obs-output-screenshot.dll" "package\obs-plugins\64bit\"
+          Compress-Archive -Path "package\*" -DestinationPath "${{ env.PLUGIN_NAME }}-windows.zip"
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-windows
+          path: ${{ env.PLUGIN_NAME }}-windows.zip
+
+  # ── Release (on tag push) ─────────────────────────────────────────────────
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [macos, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/${{ env.PLUGIN_NAME }}-macos/${{ env.PLUGIN_NAME }}-macos.zip
+            artifacts/${{ env.PLUGIN_NAME }}-windows/${{ env.PLUGIN_NAME }}-windows.zip
+          generate_release_notes: true
