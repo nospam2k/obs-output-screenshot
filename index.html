@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>OBS-web remote control</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <style>
+    @keyframes rotating { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .rotate { animation: rotating 10s linear infinite; }
+    .navbar.is-primary { background-color: #3e8ed0; }
+
+    #scene-switcher { display: flex; gap: 1rem; overflow-y: hidden; }
+    #scene-switcher > ol { list-style: none; flex: 1; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+    #scene-switcher li { display: block; min-width: 10rem; }
+
+    .scene-btn {
+      border: none; text-align: left; width: 100%; cursor: pointer;
+      background: #3e8ed0; color: #fff; font-size: 1.5rem;
+      padding: .3rem; border-radius: 5px;
+    }
+    .scene-btn { opacity: 0.5; }
+    .scene-btn.preview { opacity: 1; }
+    .scene-btn.dim { opacity: 0.5; }
+    #sources-list .scene-btn { opacity: 1; }
+    #sources-list .scene-btn.dim { opacity: 0.5; }
+    .scene-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    #source-switchers ol {
+      list-style: none; display: flex; flex-wrap: wrap;
+      gap: .5rem; margin-bottom: 2rem; padding: 0;
+    }
+    #source-switchers li { max-width: 192px; }
+    .source-btn {
+      border: none; cursor: pointer; background: #3e8ed0;
+      color: #fff; font-size: 1rem; padding: .3rem; border-radius: 5px; width: 100%;
+    }
+    .source-btn img { display: block; width: 100%; }
+    .source-btn.program { background: #48c78e; }
+
+    #program-preview img { max-width: 100%; background: #000; display: block; }
+    .button[disabled] { opacity: 1; }
+  </style>
+</head>
+<body class="has-background-dark has-text-white" style="min-height:100vh">
+
+<nav class="navbar is-primary" aria-label="main navigation">
+  <div class="navbar-brand">
+    <a class="navbar-item is-size-4 has-text-weight-bold" href="/">
+      <img src="favicon.png" alt="OBS-web" class="rotate">
+    </a>
+    <button class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navmenu">
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+    </button>
+  </div>
+  <div id="navmenu" class="navbar-menu">
+    <div class="navbar-end">
+      <div class="navbar-item">
+        <div class="buttons">
+          <button id="nav-stats" class="button is-info is-light" disabled style="display:none"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<section class="section">
+  <div class="container" id="main"></div>
+</section>
+
+<script src="/obs-ws.js"></script>
+<script>
+function getSetting(key) { return localStorage.getItem(key) || '' }
+function setSetting(key, val) { localStorage.setItem(key, val) }
+
+// ── OBS client ───────────────────────────────────────────────────────────────
+
+const obs = new OBSWebSocket()
+obs.on('error', err => console.error('Socket error:', err))
+
+async function sendCommand(cmd, params) {
+  try { return await obs.call(cmd, params || {}) }
+  catch (e) { console.log('Error:', cmd, e.message); return {} }
+}
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+let isStudioMode = false
+let programScene = ''
+let previewScene = ''
+let curScene     = ''
+let scenes       = []
+let sceneItems   = []
+let transitions  = []
+let imageFormat  = 'jpg'
+let heartbeatInterval
+let screenshotInterval
+
+// Map<sceneName, {items, itemsIndex, currentItemId, screenshottedIds, el}>
+const switcherState = new Map()
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const el = id => document.getElementById(id)
+
+function h(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+}
+
+// ── Nav stats ────────────────────────────────────────────────────────────────
+
+function updateStats(stats) {
+  const btn = el('nav-stats')
+  if (stats && stats.activeFps !== undefined) {
+    btn.textContent = `${Math.round(stats.activeFps)} fps, ${Math.round(stats.cpuUsage)}% CPU, ${stats.renderSkippedFrames} skipped frames`
+    btn.style.display = ''
+  } else {
+    btn.style.display = 'none'
+  }
+}
+
+// ── Program/Preview ──────────────────────────────────────────────────────────
+
+function updateProgramPreview() {
+  const previewCol     = el('preview-col')
+  const transitionsCol = el('transitions-col')
+  if (!previewCol) return
+
+  el('program-scene-name').textContent = programScene
+
+  if (isStudioMode) {
+    previewCol.style.display     = ''
+    transitionsCol.style.display = ''
+    el('preview-scene-name').textContent = previewScene
+
+    transitionsCol.innerHTML = transitions.map((t, i) =>
+      `<button class="button is-fullwidth is-info" style="margin-bottom:.5rem" data-idx="${i}">${h(t.transitionName)}</button>`
+    ).join('')
+    transitionsCol.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const t = transitions[Number(btn.dataset.idx)]
+        await sendCommand('SetCurrentSceneTransition', { transitionName: t.transitionName })
+        await sendCommand('TriggerStudioModeTransition')
+      })
+    })
+  } else {
+    previewCol.style.display     = 'none'
+    transitionsCol.style.display = 'none'
+  }
+}
+
+// ── Scenes ───────────────────────────────────────────────────────────────────
+
+function renderScenes() {
+  const list = el('scenes-list')
+  if (!list) return
+  list.innerHTML = scenes
+    .filter(s => !s.sceneName.includes('(hidden)'))
+    .slice().reverse()
+    .map(s => {
+      const cls = s.sceneName === previewScene ? 'preview' : ''
+      return `<li><button class="scene-btn ${cls}" data-scene="${h(s.sceneName)}">${h(s.sceneName)}</button></li>`
+    }).join('')
+  list.querySelectorAll('.scene-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (isStudioMode) sendCommand('SetCurrentPreviewScene', { sceneName: btn.dataset.scene })
+      else              sendCommand('SetCurrentProgramScene', { sceneName: btn.dataset.scene })
+    })
+  })
+}
+
+// ── Sources ──────────────────────────────────────────────────────────────────
+
+function renderSources() {
+  const list = el('sources-list')
+  if (!list) return
+  const items = sceneItems.filter(i => !i.sourceName.includes('(hidden)')).slice().reverse()
+  if (!items.length) {
+    list.innerHTML = `<li><button class="scene-btn" disabled>No sources</button></li>`
+    return
+  }
+  list.innerHTML = items.map(item =>
+    `<li><button class="scene-btn ${item.sceneItemEnabled ? '' : 'dim'}" data-id="${item.sceneItemId}" data-enabled="${item.sceneItemEnabled}">${h(item.sourceName)}</button></li>`
+  ).join('')
+  list.querySelectorAll('.scene-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      sendCommand('SetSceneItemEnabled', {
+        sceneName: curScene,
+        sceneItemEnabled: btn.dataset.enabled !== 'true',
+        sceneItemId: Number(btn.dataset.id)
+      })
+    })
+  })
+}
+
+// ── Source switcher ──────────────────────────────────────────────────────────
+
+async function getItemScreenshot(sceneName, item) {
+  if (item.img) return item.img
+  let retry = item.sceneItemEnabled ? 3 : 1
+  while (retry--) {
+    await new Promise(r => setTimeout(r, Math.random() * 500 + 100))
+    const data = await sendCommand('GetSourceScreenshot', {
+      sourceName: item.sourceName, imageFormat, width: 192, height: 108
+    })
+    if (data && data.imageData) return data.imageData
+  }
+  return null
+}
+
+function renderSwitcherScene(sceneName) {
+  const st = switcherState.get(sceneName)
+  if (!st || !st.el) return
+  st.el.innerHTML = ''
+  st.items.forEach((item, i) => {
+    const li  = document.createElement('li')
+    const btn = document.createElement('button')
+    btn.className = 'source-btn' + (item.sceneItemEnabled ? ' program' : '')
+    if (item.img) {
+      const img = document.createElement('img')
+      img.src = item.img; img.alt = item.sourceName
+      btn.appendChild(img)
+    }
+    btn.appendChild(document.createTextNode(item.sourceName))
+    btn.addEventListener('click', async () => {
+      const prevId = st.currentItemId
+      await sendCommand('SetSceneItemEnabled', { sceneName, sceneItemId: item.sceneItemId, sceneItemEnabled: true })
+      if (prevId !== null && prevId !== item.sceneItemId)
+        await sendCommand('SetSceneItemEnabled', { sceneName, sceneItemId: prevId, sceneItemEnabled: false })
+      st.currentItemId = item.sceneItemId
+    })
+    li.appendChild(btn)
+    st.el.appendChild(li)
+  })
+}
+
+async function loadSwitcherScene(sceneName) {
+  const data  = await sendCommand('GetSceneItemList', { sceneName })
+  const items = data.sceneItems || []
+  const itemsIndex  = {}
+  let currentItemId = null
+  items.forEach((item, i) => {
+    itemsIndex[item.sceneItemId] = i
+    if (item.sceneItemEnabled) currentItemId = item.sceneItemId
+  })
+  const existing = switcherState.get(sceneName) || {}
+  switcherState.set(sceneName, { ...existing, items, itemsIndex, currentItemId, screenshottedIds: new Set() })
+  for (const item of items) item.img = await getItemScreenshot(sceneName, item)
+  renderSwitcherScene(sceneName)
+}
+
+async function loadMissingScreenshots(sceneName) {
+  const st = switcherState.get(sceneName)
+  if (!st) return
+  for (const item of st.items) {
+    if (!item.img) {
+      await sendCommand('SetSceneItemEnabled', { sceneName, sceneItemId: item.sceneItemId, sceneItemEnabled: true })
+      st.screenshottedIds.add(item.sceneItemId)
+    }
+  }
+}
+
+function renderSourceSwitchers() {
+  const container = el('source-switchers')
+  if (!container) return
+  container.innerHTML = ''
+  scenes.filter(s => s.sceneName.indexOf('(switch)') > 0).forEach(scene => {
+    const h3  = document.createElement('h3')
+    h3.className = 'subtitle has-text-white'
+    h3.textContent = scene.sceneName
+
+    const ol  = document.createElement('ol')
+    ol.className = 'switcher-items'
+
+    const btn = document.createElement('button')
+    btn.className = 'button'
+    btn.textContent = 'Load missing thumbnails'
+    btn.addEventListener('click', () => loadMissingScreenshots(scene.sceneName))
+
+    const div = document.createElement('div')
+    div.append(h3, ol, btn)
+    container.appendChild(div)
+
+    const st = switcherState.get(scene.sceneName) || { screenshottedIds: new Set() }
+    st.el = ol
+    switcherState.set(scene.sceneName, st)
+    loadSwitcherScene(scene.sceneName)
+  })
+}
+
+// ── Screenshots ──────────────────────────────────────────────────────────────
+
+async function getScreenshot() {
+  if (!programScene) return
+  await sendCommand('CallVendorRequest', {
+    vendorName: 'OutputScreenShot',
+    requestType: 'AdvancedSceneSwitcherMessage',
+    requestData: { message: 'getOutputScreenShot' }
+  })
+  if (isStudioMode && previewScene) {
+    const data = await sendCommand('GetSourceScreenshot', {
+      sourceName: previewScene, imageFormat, imageWidth: 960, imageHeight: 540
+    })
+    const img = el('preview-img')
+    if (data && data.imageData && img) img.src = data.imageData
+  }
+}
+
+// ── Connected UI ─────────────────────────────────────────────────────────────
+
+function renderConnectedUI() {
+  el('main').innerHTML = `
+    <div id="program-preview" class="columns is-centered is-vcentered has-text-centered">
+      <div class="column" id="preview-col" style="display:none">
+        <p class="has-text-left has-text-weight-bold is-size-4">Preview: <span id="preview-scene-name"></span></p>
+        <img id="preview-img" alt="Preview">
+      </div>
+      <div class="column is-narrow" id="transitions-col" style="display:none"></div>
+      <div class="column">
+        <p class="has-text-left has-text-weight-bold is-size-4">Program: <span id="program-scene-name"></span></p>
+        <img id="program-img" alt="Program" style="display:none">
+        <div id="program-warning" class="notification is-warning">
+          <strong>Program preview requires the OutputScreenShot plugin.</strong><br>
+          Install from <a href="https://github.com/obsproject/obs-websocket" target="_blank">the releases page of this plugin's GitHub repo</a>,
+          then place <code>obs-output-screenshot.dylib</code> (macOS) or <code>obs-output-screenshot.dll</code> (Windows)
+          in your OBS plugins folder and restart OBS.
+        </div>
+      </div>
+    </div>
+    <div id="scene-switcher">
+      <ol id="scenes-list"></ol>
+      <ol id="sources-list"></ol>
+    </div>
+    <div id="source-switchers"></div>
+  `
+  updateProgramPreview()
+  renderScenes()
+  renderSources()
+  renderSourceSwitchers()
+}
+
+// ── Connection form ───────────────────────────────────────────────────────────
+
+function showConnectionForm(errorMsg) {
+  el('nav-stats').style.display = 'none'
+  el('main').innerHTML = `
+    ${errorMsg ? `<div class="notification is-danger">${h(errorMsg)}</div>` : ''}
+    <div class="field is-grouped">
+      <p class="control is-expanded">
+        <input id="conn-address" class="input" type="text" placeholder="ws://localhost:4455"
+               value="${h(getSetting('obs-address'))}">
+        <input id="conn-password" class="input" type="password" placeholder="password"
+               value="${h(getSetting('obs-password'))}">
+      </p>
+      <p class="control">
+        <button class="button is-success" onclick="connectFromForm()">Connect</button>
+      </p>
+    </div>
+  `
+}
+
+async function connectFromForm() {
+  const address  = el('conn-address').value.trim()
+  const password = el('conn-password').value
+  setSetting('obs-address',  address)
+  setSetting('obs-password', password)
+  await connect(address, password)
+}
+
+// ── Connect / Disconnect ─────────────────────────────────────────────────────
+
+async function connect(address, password) {
+  address  = address  || getSetting('obs-address')
+  password = password || getSetting('obs-password')
+  if (!address) { showConnectionForm(); return }
+  if (address.indexOf('://') === -1) {
+    address = (location.protocol === 'https:' || address.endsWith(':443') ? 'wss://' : 'ws://') + address
+  }
+  el('main').innerHTML = `<p class="has-text-white">Connecting to ${h(address)}…</p>`
+  try {
+    await obs.connect(address, password)
+  } catch (e) {
+    console.log(e)
+    showConnectionForm(e.message)
+  }
+}
+
+// ── OBS events ───────────────────────────────────────────────────────────────
+
+obs.on('ConnectionClosed', () => {
+  clearInterval(heartbeatInterval)
+  clearInterval(screenshotInterval)
+  updateStats(null)
+  showConnectionForm('Connection closed.')
+})
+
+obs.on('Identified', async () => {
+  const version = await sendCommand('GetVersion')
+  if (version.supportedImageFormats && version.supportedImageFormats.includes('webp') &&
+      document.createElement('canvas').toDataURL('image/webp').startsWith('data:image/webp')) {
+    imageFormat = 'webp'
+  }
+
+  const studioData = await sendCommand('GetStudioModeEnabled')
+  isStudioMode = (studioData && studioData.studioModeEnabled) || false
+
+  const sceneList = await sendCommand('GetSceneList')
+  scenes       = (sceneList && sceneList.scenes) || []
+  programScene = (sceneList && sceneList.currentProgramSceneName) || ''
+  previewScene = (sceneList && sceneList.currentPreviewSceneName) || programScene
+  curScene     = isStudioMode ? previewScene : programScene
+
+  const transData  = await sendCommand('GetSceneTransitionList')
+  transitions = (transData && transData.transitions) || []
+
+  if (curScene) {
+    const itemData = await sendCommand('GetSceneItemList', { sceneName: curScene })
+    sceneItems = (itemData && itemData.sceneItems) || []
+  }
+
+  renderConnectedUI()
+
+  heartbeatInterval  = setInterval(async () => updateStats(await sendCommand('GetStats')), 1000)
+  screenshotInterval = setInterval(getScreenshot, 1000)
+})
+
+obs.on('ConnectionError', e => console.log('ConnectionError', e))
+
+obs.on('VendorEvent', ({ vendorName, eventData }) => {
+  if (vendorName !== 'OutputScreenShot') return
+  const img = el('program-img')
+  if (eventData && eventData.message && img) {
+    img.src = 'data:image/png;base64,' + eventData.message
+    img.style.display = ''
+    const warning = el('program-warning')
+    if (warning) warning.style.display = 'none'
+  }
+})
+
+obs.on('StudioModeStateChanged', async data => {
+  isStudioMode = data.studioModeEnabled
+  curScene = isStudioMode ? previewScene : programScene
+  if (curScene) {
+    const itemData = await sendCommand('GetSceneItemList', { sceneName: curScene })
+    sceneItems = (itemData && itemData.sceneItems) || []
+  }
+  updateProgramPreview()
+  renderScenes()
+  renderSources()
+})
+
+obs.on('CurrentProgramSceneChanged', async data => {
+  programScene = data.sceneName
+  if (!isStudioMode) {
+    curScene = programScene
+    const itemData = await sendCommand('GetSceneItemList', { sceneName: curScene })
+    sceneItems = (itemData && itemData.sceneItems) || []
+    renderSources()
+  }
+  renderScenes()
+  updateProgramPreview()
+  getScreenshot()
+})
+
+obs.on('CurrentPreviewSceneChanged', async data => {
+  previewScene = data.sceneName
+  curScene     = previewScene
+  const itemData = await sendCommand('GetSceneItemList', { sceneName: curScene })
+  sceneItems = (itemData && itemData.sceneItems) || []
+  renderScenes()
+  renderSources()
+  updateProgramPreview()
+  getScreenshot()
+})
+
+obs.on('SceneListChanged', data => {
+  scenes = data.scenes
+  renderScenes()
+  renderSourceSwitchers()
+})
+
+obs.on('SceneNameChanged', data => {
+  if (data.oldSceneName === programScene) programScene = data.sceneName
+  if (data.oldSceneName === previewScene) previewScene = data.sceneName
+  for (const s of scenes) if (s.sceneName === data.oldSceneName) s.sceneName = data.sceneName
+  renderScenes()
+  updateProgramPreview()
+})
+
+obs.on('SceneItemEnableStateChanged', async data => {
+  const item = sceneItems.find(i => i.sceneItemId === data.sceneItemId)
+  if (item) { item.sceneItemEnabled = data.sceneItemEnabled; renderSources() }
+
+  const st = switcherState.get(data.sceneName)
+  if (!st) return
+  const i = st.itemsIndex[data.sceneItemId]
+  if (i === undefined) return
+  st.items[i].sceneItemEnabled = data.sceneItemEnabled
+  if (data.sceneItemEnabled && !st.items[i].img) {
+    st.items[i].img = await getItemScreenshot(data.sceneName, st.items[i])
+    if (st.screenshottedIds.has(data.sceneItemId)) {
+      await sendCommand('SetSceneItemEnabled', { sceneName: data.sceneName, sceneItemId: data.sceneItemId, sceneItemEnabled: false })
+      st.screenshottedIds.delete(data.sceneItemId)
+    }
+  }
+  renderSwitcherScene(data.sceneName)
+})
+
+obs.on('SceneItemListReindexed', data => { if (switcherState.has(data.sceneName)) loadSwitcherScene(data.sceneName) })
+obs.on('SceneItemCreated',       data => { if (switcherState.has(data.sceneName)) loadSwitcherScene(data.sceneName) })
+obs.on('SceneItemRemoved',       data => { if (switcherState.has(data.sceneName)) loadSwitcherScene(data.sceneName) })
+obs.on('TransitionListChanged',  data => { transitions = data.transitions || []; updateProgramPreview() })
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+if ('wakeLock' in navigator) {
+  navigator.wakeLock.request('screen').then(() => {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') navigator.wakeLock.request('screen').catch(() => {})
+    })
+  }).catch(() => {})
+}
+
+document.querySelector('.navbar-burger').addEventListener('click', function () {
+  this.classList.toggle('is-active')
+  el(this.dataset.target).classList.toggle('is-active')
+})
+
+connect()
+</script>
+</body>
+</html>
