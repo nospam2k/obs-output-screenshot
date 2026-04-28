@@ -14,10 +14,13 @@ target_compile_definitions(obs-output-screenshot PRIVATE
 
 # ── Find libobs ───────────────────────────────────────────────────────────────
 if(DEFINED LIBOBS_INCLUDE_DIR)
-    # macOS CI: headers extracted from OBS source; libobs symbols resolved at
-    # load time by OBS itself, so no link target needed.
     target_include_directories(obs-output-screenshot PRIVATE "${LIBOBS_INCLUDE_DIR}")
-    target_link_options(obs-output-screenshot PRIVATE -undefined dynamic_lookup)
+    if(APPLE)
+        # Symbols provided by OBS at load time; no link target needed.
+        target_link_options(obs-output-screenshot PRIVATE -undefined dynamic_lookup)
+    elseif(WIN32 AND DEFINED LIBOBS_LIB)
+        target_link_libraries(obs-output-screenshot PRIVATE "${LIBOBS_LIB}")
+    endif()
 else()
     # Windows CI and local builds: use the installed libobs cmake package.
     find_package(libobs REQUIRED)

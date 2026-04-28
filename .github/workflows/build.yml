@@ -69,71 +69,79 @@ jobs:
           path: ${{ env.PLUGIN_NAME }}-macos.zip
 
   # ── Windows ───────────────────────────────────────────────────────────────────
-  # Build libobs from source using prebuilt obs-deps (FFmpeg, jansson, etc.).
-  # Build the full set (no --target) so cmake install finds all required files.
-  # OBS generates libobsConfig.cmake on install, so find_package works.
+  # Get obs.dll from the official Windows portable zip, generate obs.lib from it
+  # using MSVC tools (no OBS source build needed), and pull headers from source.
   windows:
     name: Windows (x64)
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache OBS build
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache OBS dev files
         id: cache-obs
         uses: actions/cache@v4
         with:
-          path: obs-install
-          key: obs-windows-${{ env.OBS_VERSION }}-${{ env.OBS_DEPS_TAG }}
+          path: obs-dev
+          key: obs-windows-dev-${{ env.OBS_VERSION }}
 
-      - name: Download obs-deps
+      - name: Download OBS Windows portable (for obs.dll)
         if: steps.cache-obs.outputs.cache-hit != 'true'
         run: |
           Invoke-WebRequest `
-            "https://github.com/obsproject/obs-deps/releases/download/$env:OBS_DEPS_TAG/windows-deps-$env:OBS_DEPS_TAG-x64.zip" `
-            -OutFile obs-deps.zip
-          Expand-Archive obs-deps.zip -DestinationPath obs-deps
+            "https://github.com/obsproject/obs-studio/releases/download/$env:OBS_VERSION/OBS-Studio-$env:OBS_VERSION-Windows.zip" `
+            -OutFile obs.zip
+          Expand-Archive obs.zip -DestinationPath obs-portable
         shell: pwsh
 
-      - name: Download OBS Studio source
+      - name: Generate obs.lib from obs.dll
+        if: steps.cache-obs.outputs.cache-hit != 'true'
+        run: |
+          $dll = Get-ChildItem -Path obs-portable -Recurse -Filter obs.dll | Select-Object -First 1
+          Write-Host "Using: $($dll.FullName)"
+          $exports = dumpbin /exports $dll.FullName |
+            Select-String '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+          Write-Host "Exports found: $($exports.Count)"
+          ("LIBRARY obs", "EXPORTS") + $exports | Out-File -Encoding ASCII obs.def
+          lib /def:obs.def /out:obs.lib /machine:x64 /nologo
+          New-Item -ItemType Directory -Force obs-dev\lib
+          Copy-Item obs.lib obs-dev\lib\
+        shell: pwsh
+
+      - name: Download OBS headers from source
         if: steps.cache-obs.outputs.cache-hit != 'true'
         run: |
           Invoke-WebRequest `
             "https://github.com/obsproject/obs-studio/archive/refs/tags/$env:OBS_VERSION.zip" `
             -OutFile obs-src.zip
-          Expand-Archive obs-src.zip -DestinationPath .
-          Rename-Item "obs-studio-$env:OBS_VERSION" obs-studio
-        shell: pwsh
-
-      - name: Build OBS (libobs + required platform libs)
-        if: steps.cache-obs.outputs.cache-hit != 'true'
-        run: |
-          cmake -S obs-studio -B obs-build `
-            -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_PREFIX_PATH="${{ github.workspace }}\obs-deps" `
-            -DENABLE_PLUGINS=OFF `
-            -DENABLE_UI=OFF `
-            -DENABLE_SCRIPTING=OFF `
-            -DENABLE_BROWSER=OFF `
-            -DENABLE_AJA=OFF `
-            -DENABLE_VST=OFF `
-            -DENABLE_VLC=OFF `
-            -DENABLE_WEBSOCKET=OFF
-          cmake --build obs-build --config RelWithDebInfo
-          cmake --install obs-build --prefix "${{ github.workspace }}\obs-install" --config RelWithDebInfo
-        shell: pwsh
-
-      - name: Locate libobs cmake config
-        run: |
-          $cfg = Get-ChildItem -Path obs-install -Recurse -Filter "libobsConfig.cmake" | Select-Object -First 1
-          if (-not $cfg) { Write-Error "libobsConfig.cmake not found in obs-install"; exit 1 }
-          "LIBOBS_DIR=$($cfg.DirectoryName)" | Out-File -Append $env:GITHUB_ENV
+          Expand-Archive obs-src.zip -DestinationPath obs-src
+          New-Item -ItemType Directory -Force obs-dev\include
+          Copy-Item -Recurse "obs-src\obs-studio-$env:OBS_VERSION\libobs\*" obs-dev\include\
+          # obsconfig.h is cmake-generated; create a minimal version manually
+          @"
+          #pragma once
+          /* #undef OBS_DATA_PATH */
+          /* #undef OBS_PLUGIN_PATH */
+          /* #undef OBS_PLUGIN_DESTINATION */
+          /* #undef GIO_FOUND */
+          /* #undef PULSEAUDIO_FOUND */
+          /* #undef XCB_XINPUT_FOUND */
+          /* #undef ENABLE_WAYLAND */
+          #define OBS_RELEASE_CANDIDATE 0
+          #define OBS_BETA 0
+          "@ | Out-File -Encoding UTF8 obs-dev\include\obsconfig.h
         shell: pwsh
 
       - name: Build plugin
         run: |
           cmake -S . -B build `
             -G "Visual Studio 17 2022" -A x64 `
-            -Dlibobs_DIR="${{ env.LIBOBS_DIR }}"
+            -DLIBOBS_INCLUDE_DIR="${{ github.workspace }}\obs-dev\include" `
+            -DLIBOBS_LIB="${{ github.workspace }}\obs-dev\lib\obs.lib"
           cmake --build build --config RelWithDebInfo
         shell: pwsh
 
