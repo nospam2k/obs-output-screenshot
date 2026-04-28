@@ -13,9 +13,12 @@ env:
   OBS_DEPS_TAG: 2024-09-12
 
 jobs:
-  # ── macOS (universal: arm64 + x86_64) ─────────────────────────────────────
+  # ── macOS ─────────────────────────────────────────────────────────────────────
+  # Extract libobs headers directly from the official OBS macOS DMG.
+  # No source build needed — -undefined dynamic_lookup lets OBS resolve symbols
+  # at load time, so we only need headers to compile against.
   macos:
-    name: macOS (universal)
+    name: macOS (arm64 + x86_64)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -23,51 +26,14 @@ jobs:
       - name: Install build tools
         run: brew install cmake ninja
 
-      - name: Cache OBS build
-        id: cache-obs
-        uses: actions/cache@v4
-        with:
-          path: obs-install
-          key: obs-macos-${{ env.OBS_VERSION }}-${{ env.OBS_DEPS_TAG }}
-
-      - name: Download obs-deps (prebuilt FFmpeg, jansson, etc.)
-        if: steps.cache-obs.outputs.cache-hit != 'true'
-        run: |
-          mkdir obs-deps
-          curl -sSL \
-            "https://github.com/obsproject/obs-deps/releases/download/${{ env.OBS_DEPS_TAG }}/macos-deps-${{ env.OBS_DEPS_TAG }}-universal.tar.xz" \
-            | tar xJf - -C obs-deps/
-
-      - name: Download OBS Studio source
-        if: steps.cache-obs.outputs.cache-hit != 'true'
+      - name: Download OBS macOS DMG and extract framework
         run: |
           curl -sSL \
-            "https://github.com/obsproject/obs-studio/archive/refs/tags/${{ env.OBS_VERSION }}.tar.gz" \
-            | tar xzf -
-
-      - name: Build libobs
-        if: steps.cache-obs.outputs.cache-hit != 'true'
-        run: |
-          cmake -S "obs-studio-${{ env.OBS_VERSION }}" -B obs-build -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps" \
-            -DENABLE_PLUGINS=OFF \
-            -DENABLE_UI=OFF \
-            -DENABLE_SCRIPTING=OFF \
-            -DENABLE_BROWSER=OFF \
-            -DENABLE_AJA=OFF \
-            -DENABLE_VST=OFF \
-            -DENABLE_VLC=OFF \
-            -DENABLE_WEBSOCKET=OFF
-          cmake --build obs-build
-          cmake --install obs-build --prefix "${{ github.workspace }}/obs-install"
-
-      - name: Locate libobs cmake config
-        run: |
-          LIBOBS_DIR=$(find obs-install -name "libobsConfig.cmake" -exec dirname {} \; | head -1)
-          echo "LIBOBS_DIR=${LIBOBS_DIR}" >> $GITHUB_ENV
+            "https://github.com/obsproject/obs-studio/releases/download/${{ env.OBS_VERSION }}/OBS-Studio-${{ env.OBS_VERSION }}-macOS-Apple.dmg" \
+            -o obs.dmg
+          hdiutil attach obs.dmg -mountpoint /tmp/OBS -nobrowse -quiet
+          cp -R "/tmp/OBS/OBS.app/Contents/Frameworks/libobs.framework" /tmp/libobs.framework
+          hdiutil detach /tmp/OBS -quiet
 
       - name: Build plugin
         run: |
@@ -75,7 +41,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-            -Dlibobs_DIR="${{ env.LIBOBS_DIR }}"
+            -DLIBOBS_INCLUDE_DIR="/tmp/libobs.framework/Headers"
           cmake --build build
 
       - name: Package
@@ -89,7 +55,9 @@ jobs:
           name: ${{ env.PLUGIN_NAME }}-macos
           path: ${{ env.PLUGIN_NAME }}-macos.zip
 
-  # ── Windows (x64) ─────────────────────────────────────────────────────────
+  # ── Windows ───────────────────────────────────────────────────────────────────
+  # Build libobs from source using prebuilt obs-deps (FFmpeg, jansson, etc.).
+  # Locate headers and obs.lib by path after install — no cmake config needed.
   windows:
     name: Windows (x64)
     runs-on: windows-2022
@@ -103,7 +71,7 @@ jobs:
           path: obs-install
           key: obs-windows-${{ env.OBS_VERSION }}-${{ env.OBS_DEPS_TAG }}
 
-      - name: Download obs-deps (prebuilt FFmpeg, jansson, etc.)
+      - name: Download obs-deps
         if: steps.cache-obs.outputs.cache-hit != 'true'
         run: |
           Invoke-WebRequest `
@@ -136,21 +104,26 @@ jobs:
             -DENABLE_VST=OFF `
             -DENABLE_VLC=OFF `
             -DENABLE_WEBSOCKET=OFF
-          cmake --build obs-build --config RelWithDebInfo
+          cmake --build obs-build --target libobs --config RelWithDebInfo
           cmake --install obs-build --prefix "${{ github.workspace }}\obs-install" --config RelWithDebInfo
         shell: pwsh
 
-      - name: Locate libobs cmake config
+      - name: Locate libobs headers and import library
         run: |
-          $cfg = Get-ChildItem -Path obs-install -Recurse -Filter "libobsConfig.cmake" | Select-Object -First 1
-          "LIBOBS_DIR=$($cfg.DirectoryName)" | Out-File -Append $env:GITHUB_ENV
+          $hdr = Get-ChildItem -Path obs-install -Recurse -Filter "obs-module.h" | Select-Object -First 1
+          $lib = Get-ChildItem -Path obs-install -Recurse -Filter "obs.lib"       | Select-Object -First 1
+          if (-not $hdr) { Write-Error "obs-module.h not found in obs-install"; exit 1 }
+          if (-not $lib) { Write-Error "obs.lib not found in obs-install";       exit 1 }
+          "LIBOBS_INCLUDE_DIR=$($hdr.DirectoryName)" | Out-File -Append $env:GITHUB_ENV
+          "LIBOBS_LIB=$($lib.FullName)"              | Out-File -Append $env:GITHUB_ENV
         shell: pwsh
 
       - name: Build plugin
         run: |
           cmake -S . -B build `
             -G "Visual Studio 17 2022" -A x64 `
-            -Dlibobs_DIR="${{ env.LIBOBS_DIR }}"
+            -DLIBOBS_INCLUDE_DIR="${{ env.LIBOBS_INCLUDE_DIR }}" `
+            -DLIBOBS_LIB="${{ env.LIBOBS_LIB }}"
           cmake --build build --config RelWithDebInfo
         shell: pwsh
 
@@ -166,7 +139,7 @@ jobs:
           name: ${{ env.PLUGIN_NAME }}-windows
           path: ${{ env.PLUGIN_NAME }}-windows.zip
 
-  # ── Release (on tag push) ─────────────────────────────────────────────────
+  # ── Release (on tag push) ─────────────────────────────────────────────────────
   release:
     name: Create Release
     runs-on: ubuntu-latest
