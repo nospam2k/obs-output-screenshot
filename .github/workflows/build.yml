@@ -14,9 +14,9 @@ env:
 
 jobs:
   # ── macOS ─────────────────────────────────────────────────────────────────────
-  # Extract libobs headers directly from the official OBS macOS DMG.
-  # No source build needed — -undefined dynamic_lookup lets OBS resolve symbols
-  # at load time, so we only need headers to compile against.
+  # Headers come straight from the OBS source tarball (the DMG has no dev headers).
+  # -undefined dynamic_lookup lets OBS resolve libobs symbols at load time,
+  # so we don't need to link against libobs at all — headers are enough.
   macos:
     name: macOS (arm64 + x86_64)
     runs-on: macos-14
@@ -26,14 +26,27 @@ jobs:
       - name: Install build tools
         run: brew install cmake ninja
 
-      - name: Download OBS macOS DMG and extract framework
+      - name: Download OBS headers from source
         run: |
           curl -sSL \
-            "https://github.com/obsproject/obs-studio/releases/download/${{ env.OBS_VERSION }}/OBS-Studio-${{ env.OBS_VERSION }}-macOS-Apple.dmg" \
-            -o obs.dmg
-          hdiutil attach obs.dmg -mountpoint /tmp/OBS -nobrowse -quiet
-          cp -R "/tmp/OBS/OBS.app/Contents/Frameworks/libobs.framework" /tmp/libobs.framework
-          hdiutil detach /tmp/OBS -quiet
+            "https://github.com/obsproject/obs-studio/archive/refs/tags/${{ env.OBS_VERSION }}.tar.gz" \
+            -o obs-src.tar.gz
+          mkdir -p obs-headers
+          tar xzf obs-src.tar.gz -C obs-headers --strip-components=2 \
+            "obs-studio-${{ env.OBS_VERSION }}/libobs"
+          # obsconfig.h is cmake-generated; create a minimal macOS version manually
+          cat > obs-headers/obsconfig.h << 'EOF'
+          #pragma once
+          /* #undef OBS_DATA_PATH */
+          /* #undef OBS_PLUGIN_PATH */
+          /* #undef OBS_PLUGIN_DESTINATION */
+          /* #undef GIO_FOUND */
+          /* #undef PULSEAUDIO_FOUND */
+          /* #undef XCB_XINPUT_FOUND */
+          /* #undef ENABLE_WAYLAND */
+          #define OBS_RELEASE_CANDIDATE 0
+          #define OBS_BETA 0
+          EOF
 
       - name: Build plugin
         run: |
@@ -41,7 +54,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-            -DLIBOBS_INCLUDE_DIR="/tmp/libobs.framework/Headers"
+            -DLIBOBS_INCLUDE_DIR="${{ github.workspace }}/obs-headers"
           cmake --build build
 
       - name: Package
@@ -57,7 +70,8 @@ jobs:
 
   # ── Windows ───────────────────────────────────────────────────────────────────
   # Build libobs from source using prebuilt obs-deps (FFmpeg, jansson, etc.).
-  # Locate headers and obs.lib by path after install — no cmake config needed.
+  # Build the full set (no --target) so cmake install finds all required files.
+  # OBS generates libobsConfig.cmake on install, so find_package works.
   windows:
     name: Windows (x64)
     runs-on: windows-2022
@@ -90,7 +104,7 @@ jobs:
           Rename-Item "obs-studio-$env:OBS_VERSION" obs-studio
         shell: pwsh
 
-      - name: Build libobs
+      - name: Build OBS (libobs + required platform libs)
         if: steps.cache-obs.outputs.cache-hit != 'true'
         run: |
           cmake -S obs-studio -B obs-build `
@@ -104,26 +118,22 @@ jobs:
             -DENABLE_VST=OFF `
             -DENABLE_VLC=OFF `
             -DENABLE_WEBSOCKET=OFF
-          cmake --build obs-build --target libobs --config RelWithDebInfo
+          cmake --build obs-build --config RelWithDebInfo
           cmake --install obs-build --prefix "${{ github.workspace }}\obs-install" --config RelWithDebInfo
         shell: pwsh
 
-      - name: Locate libobs headers and import library
+      - name: Locate libobs cmake config
         run: |
-          $hdr = Get-ChildItem -Path obs-install -Recurse -Filter "obs-module.h" | Select-Object -First 1
-          $lib = Get-ChildItem -Path obs-install -Recurse -Filter "obs.lib"       | Select-Object -First 1
-          if (-not $hdr) { Write-Error "obs-module.h not found in obs-install"; exit 1 }
-          if (-not $lib) { Write-Error "obs.lib not found in obs-install";       exit 1 }
-          "LIBOBS_INCLUDE_DIR=$($hdr.DirectoryName)" | Out-File -Append $env:GITHUB_ENV
-          "LIBOBS_LIB=$($lib.FullName)"              | Out-File -Append $env:GITHUB_ENV
+          $cfg = Get-ChildItem -Path obs-install -Recurse -Filter "libobsConfig.cmake" | Select-Object -First 1
+          if (-not $cfg) { Write-Error "libobsConfig.cmake not found in obs-install"; exit 1 }
+          "LIBOBS_DIR=$($cfg.DirectoryName)" | Out-File -Append $env:GITHUB_ENV
         shell: pwsh
 
       - name: Build plugin
         run: |
           cmake -S . -B build `
             -G "Visual Studio 17 2022" -A x64 `
-            -DLIBOBS_INCLUDE_DIR="${{ env.LIBOBS_INCLUDE_DIR }}" `
-            -DLIBOBS_LIB="${{ env.LIBOBS_LIB }}"
+            -Dlibobs_DIR="${{ env.LIBOBS_DIR }}"
           cmake --build build --config RelWithDebInfo
         shell: pwsh
 
