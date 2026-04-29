@@ -223,6 +223,21 @@ static std::string capture_program_output_as_base64_png()
         return "";
     }
 
+    // Warn once if the frame is entirely black — likely a render pipeline issue.
+    static bool logged_dims = false;
+    if (!logged_dims) {
+        blog(LOG_INFO, PLUGIN_LOG_TAG "First capture: %ux%u", w, h);
+        logged_dims = true;
+    }
+
+    bool all_black = true;
+    for (size_t i = 0; i < (size_t)w * 4 && all_black; i += 4)
+        if (rgba[i] || rgba[i + 1] || rgba[i + 2])
+            all_black = false;
+    if (all_black)
+        blog(LOG_WARNING, PLUGIN_LOG_TAG
+             "Captured frame is entirely black — render pipeline may have changed");
+
     auto png = rgba_to_png(rgba.data(), w, h);
     return base64_encode(png.data(), png.size());
 }
@@ -253,7 +268,8 @@ static void on_request(obs_data_t * /*request_data*/,
 
 bool obs_module_load(void)
 {
-    blog(LOG_INFO, PLUGIN_LOG_TAG "Loading plugin v%s", PLUGIN_VERSION);
+    blog(LOG_INFO, PLUGIN_LOG_TAG "Loading plugin v%s (built against OBS %s)",
+         PLUGIN_VERSION, obs_get_version_string());
     return true;
 }
 
