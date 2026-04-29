@@ -227,7 +227,7 @@ static std::string capture_program_output_as_base64_png()
 
 // ── obs-websocket vendor glue ─────────────────────────────────────────────────
 
-static obs_websocket_vendor_t *vendor = nullptr;
+static obs_websocket_vendor vendor = nullptr;
 
 static void on_request(obs_data_t *request_data,
                         obs_data_t *response_data,
@@ -259,28 +259,30 @@ static void on_request(obs_data_t *request_data,
 bool obs_module_load(void)
 {
     blog(LOG_INFO, PLUGIN_LOG_TAG "Loading plugin v%s", PLUGIN_VERSION);
+    return true;
+}
 
+// obs_module_post_load is required by obs-websocket-api — vendor registration
+// must happen after all modules (including obs-websocket) have loaded.
+void obs_module_post_load(void)
+{
     vendor = obs_websocket_register_vendor(VENDOR_NAME);
     if (!vendor) {
-        blog(LOG_ERROR, PLUGIN_LOG_TAG
-             "obs_websocket_register_vendor failed — is obs-websocket loaded?");
-        return true; // Return true so OBS doesn't unload us; we'll just be inactive
+        blog(LOG_WARNING, PLUGIN_LOG_TAG
+             "obs_websocket_register_vendor failed — obs-websocket not loaded?");
+        return;
     }
 
     bool ok = obs_websocket_vendor_register_request(
         vendor, "AdvancedSceneSwitcherMessage", on_request, nullptr);
 
     if (ok)
-        blog(LOG_INFO, PLUGIN_LOG_TAG
-             "Registered vendor '%s' request 'AdvancedSceneSwitcherMessage'", VENDOR_NAME);
+        blog(LOG_INFO, PLUGIN_LOG_TAG "Registered vendor request");
     else
         blog(LOG_ERROR, PLUGIN_LOG_TAG "Failed to register vendor request");
-
-    return true;
 }
 
 void obs_module_unload(void)
 {
     blog(LOG_INFO, PLUGIN_LOG_TAG "Unloading plugin");
-    // vendor handle is cleaned up by obs-websocket when OBS shuts down
 }
