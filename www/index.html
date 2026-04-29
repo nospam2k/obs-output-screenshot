@@ -319,19 +319,23 @@ function updateStreamUI() {
   btn.className   = isStreaming ? 'button is-danger' : 'button is-success'
 }
 
+async function saveStreamKey() {
+  const key = el('stream-key').value.trim()
+  if (!key) return
+  const saved = getSetting('stream-key')
+  if (key === saved) return
+  setSetting('stream-key', key)
+  await sendCommand('SetStreamServiceSettings', {
+    streamServiceType: 'rtmp_common',
+    streamServiceSettings: { service: 'YouTube - RTMP', server: 'primary', key }
+  })
+}
+
 async function toggleStream() {
   if (isStreaming) {
     await sendCommand('StopStream')
   } else {
-    const key = el('stream-key').value.trim()
-    if (key) {
-      setSetting('stream-key', key)
-      const current = await sendCommand('GetStreamServiceSettings')
-      await sendCommand('SetStreamServiceSettings', {
-        streamServiceType: (current && current.streamServiceType) || 'rtmp_common',
-        streamServiceSettings: { ...((current && current.streamServiceSettings) || {}), key }
-      })
-    }
+    await saveStreamKey()
     await sendCommand('StartStream')
   }
 }

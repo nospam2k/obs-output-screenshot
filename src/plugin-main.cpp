@@ -268,7 +268,7 @@ static void on_request(obs_data_t * /*request_data*/,
 
 bool obs_module_load(void)
 {
-    blog(LOG_INFO, PLUGIN_LOG_TAG "Loading plugin v%s (built against OBS %s)",
+    blog(LOG_INFO, PLUGIN_LOG_TAG "Loading plugin v%s on OBS %s",
          PLUGIN_VERSION, obs_get_version_string());
     return true;
 }
