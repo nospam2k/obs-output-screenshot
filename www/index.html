@@ -89,6 +89,7 @@ async function sendCommand(cmd, params) {
 // ── State ────────────────────────────────────────────────────────────────────
 
 let isStudioMode = false
+let isStreaming  = false
 let programScene = ''
 let previewScene = ''
 let curScene     = ''
@@ -309,6 +310,32 @@ async function getScreenshot() {
   }
 }
 
+// ── Stream controls ──────────────────────────────────────────────────────────
+
+function updateStreamUI() {
+  const btn = el('stream-btn')
+  if (!btn) return
+  btn.textContent = isStreaming ? 'Stop Stream' : 'Go Live'
+  btn.className   = isStreaming ? 'button is-danger' : 'button is-success'
+}
+
+async function toggleStream() {
+  if (isStreaming) {
+    await sendCommand('StopStream')
+  } else {
+    const key = el('stream-key').value.trim()
+    if (key) {
+      setSetting('stream-key', key)
+      const current = await sendCommand('GetStreamServiceSettings')
+      await sendCommand('SetStreamServiceSettings', {
+        streamServiceType: (current && current.streamServiceType) || 'rtmp_common',
+        streamServiceSettings: { ...((current && current.streamServiceSettings) || {}), key }
+      })
+    }
+    await sendCommand('StartStream')
+  }
+}
+
 // ── Connected UI ─────────────────────────────────────────────────────────────
 
 function renderConnectedUI() {
@@ -330,6 +357,15 @@ function renderConnectedUI() {
         </div>
       </div>
     </div>
+    <div class="field has-addons" style="margin-bottom:1rem">
+      <p class="control is-expanded">
+        <input id="stream-key" class="input" type="password" placeholder="YouTube stream key (leave blank to use key already set in OBS)"
+               value="${h(getSetting('stream-key'))}">
+      </p>
+      <p class="control">
+        <button id="stream-btn" class="button is-success" onclick="toggleStream()">Go Live</button>
+      </p>
+    </div>
     <div id="scene-switcher">
       <ol id="scenes-list"></ol>
       <ol id="sources-list"></ol>
@@ -337,6 +373,7 @@ function renderConnectedUI() {
     <div id="source-switchers"></div>
   `
   updateProgramPreview()
+  updateStreamUI()
   renderScenes()
   renderSources()
   renderSourceSwitchers()
@@ -420,6 +457,9 @@ obs.on('Identified', async () => {
     const itemData = await sendCommand('GetSceneItemList', { sceneName: curScene })
     sceneItems = (itemData && itemData.sceneItems) || []
   }
+
+  const streamStatus = await sendCommand('GetStreamStatus')
+  isStreaming = (streamStatus && streamStatus.outputActive) || false
 
   renderConnectedUI()
 
@@ -513,6 +553,11 @@ obs.on('SceneItemListReindexed', data => { if (switcherState.has(data.sceneName)
 obs.on('SceneItemCreated',       data => { if (switcherState.has(data.sceneName)) loadSwitcherScene(data.sceneName) })
 obs.on('SceneItemRemoved',       data => { if (switcherState.has(data.sceneName)) loadSwitcherScene(data.sceneName) })
 obs.on('TransitionListChanged',  data => { transitions = data.transitions || []; updateProgramPreview() })
+
+obs.on('StreamStateChanged', data => {
+  isStreaming = data.outputActive
+  updateStreamUI()
+})
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
