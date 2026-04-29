@@ -168,8 +168,8 @@ static std::string capture_program_output_as_base64_png()
         return "";
     }
 
-    uint32_t w = ovi.output_width;
-    uint32_t h = ovi.output_height;
+    uint32_t w = ovi.base_width;
+    uint32_t h = ovi.base_height;
 
     // Allocate staging texture and read pixels via obs_enter_graphics()
     std::vector<uint8_t> rgba(w * h * 4, 0);
