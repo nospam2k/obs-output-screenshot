@@ -181,11 +181,13 @@ static std::string capture_program_output_as_base64_png()
 
     bool captured = false;
 
+    gs_texrender_reset(texrender);
     if (gs_texrender_begin(texrender, w, h)) {
         struct vec4 clear_color;
         vec4_zero(&clear_color);
         gs_clear(GS_CLEAR_COLOR, &clear_color, 1.0f, 0);
         gs_ortho(0.0f, (float)w, 0.0f, (float)h, -100.0f, 100.0f);
+        gs_set_viewport(0, 0, (int)w, (int)h);
 
         obs_render_main_texture();
 

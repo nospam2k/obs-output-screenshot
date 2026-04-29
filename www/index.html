@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="mobile-web-app-capable" content="yes">
   <title>OBS-web remote control</title>
-  <link rel="icon" type="image/png" href="favicon.png">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
   <style>
     @keyframes rotating { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -40,7 +39,7 @@
     .source-btn img { display: block; width: 100%; }
     .source-btn.program { background: #48c78e; }
 
-    #program-preview img { max-width: 100%; background: #000; display: block; }
+    #program-preview img { max-width: 100%; height: auto; display: block; margin: 0 auto; background: #000; }
     .button[disabled] { opacity: 1; }
   </style>
 </head>
@@ -49,7 +48,7 @@
 <nav class="navbar is-primary" aria-label="main navigation">
   <div class="navbar-brand">
     <a class="navbar-item is-size-4 has-text-weight-bold" href="/">
-      <img src="favicon.png" alt="OBS-web" class="rotate">
+      <span style="font-size:1.5rem;padding:.5rem">&#x1F4F9;</span>
     </a>
     <button class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navmenu">
       <span aria-hidden="true"></span>
@@ -72,7 +71,7 @@
   <div class="container" id="main"></div>
 </section>
 
-<script src="/obs-ws.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/obs-websocket-js@5/dist/obs-ws.global.js"></script>
 <script>
 function getSetting(key) { return localStorage.getItem(key) || '' }
 function setSetting(key, val) { localStorage.setItem(key, val) }
