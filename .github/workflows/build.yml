@@ -59,9 +59,11 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p "package/${{ env.PLUGIN_NAME }}/bin"
-          cp "build/${{ env.PLUGIN_NAME }}.dylib" "package/${{ env.PLUGIN_NAME }}/bin/"
-          zip -r "${{ env.PLUGIN_NAME }}-macos.zip" package/
+          BUNDLE="package/${{ env.PLUGIN_NAME }}.plugin/Contents"
+          mkdir -p "$BUNDLE/MacOS"
+          cp "build/${{ env.PLUGIN_NAME }}.dylib" "$BUNDLE/MacOS/${{ env.PLUGIN_NAME }}"
+          cp "package/macos/Info.plist" "$BUNDLE/Info.plist"
+          zip -r "${{ env.PLUGIN_NAME }}-macos.zip" "package/${{ env.PLUGIN_NAME }}.plugin"
 
       - uses: actions/upload-artifact@v4
         with:

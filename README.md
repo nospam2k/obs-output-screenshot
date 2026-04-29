@@ -57,10 +57,24 @@ GitHub Actions will build macOS + Windows and attach zips to the release.
 
 ## Installation
 
-1. Download the zip for your platform from the Releases page.
-2. Extract into your OBS plugins folder.
+### macOS
+
+1. Download `obs-output-screenshot-macos.zip` from the Releases page.
+2. Extract it — you'll get `obs-output-screenshot.plugin`.
+3. Move the bundle to:
+   ```
+   ~/Library/Application Support/obs-studio/plugins/
+   ```
+4. Restart OBS.
+
+### Windows
+
+1. Download `obs-output-screenshot-windows.zip` from the Releases page.
+2. Extract and copy `obs-plugins\64bit\obs-output-screenshot.dll` to:
+   ```
+   %APPDATA%\obs-studio\obs-plugins\64bit\
+   ```
 3. Restart OBS.
-4. The plugin activates automatically — no configuration needed.
 
 ## Usage with obs-web
 
