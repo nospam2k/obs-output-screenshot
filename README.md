@@ -1,8 +1,7 @@
 # obs-output-screenshot
 
 A minimal OBS plugin that captures the **live program output** and sends it to
-connected obs-websocket clients as a base64 PNG — no AdvancedSceneSwitcher
-required.
+connected obs-websocket clients as a base64 PNG.
 
 ## How it works
 

@@ -297,7 +297,7 @@ async function getScreenshot() {
   if (!programScene) return
   await sendCommand('CallVendorRequest', {
     vendorName: 'OutputScreenShot',
-    requestType: 'AdvancedSceneSwitcherMessage',
+    requestType: 'getOutputScreenShot',
     requestData: { message: 'getOutputScreenShot' }
   })
   if (isStudioMode && previewScene) {

@@ -12,7 +12,7 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-output-screenshot", "en-US")
 
 #define VENDOR_NAME    "OutputScreenShot"
-#define REQUEST_MSG    "getOutputScreenShot"
+#define REQUEST_TYPE   "getOutputScreenShot"
 #define PLUGIN_LOG_TAG "[OutputScreenShot] "
 
 // ── Base64 encoder ────────────────────────────────────────────────────────────
@@ -231,26 +231,19 @@ static std::string capture_program_output_as_base64_png()
 
 static obs_websocket_vendor vendor = nullptr;
 
-static void on_request(obs_data_t *request_data,
+static void on_request(obs_data_t * /*request_data*/,
                         obs_data_t *response_data,
                         void * /*priv*/)
 {
-    // request_data contains { "message": "getOutputScreenShot" }
-    const char *msg = obs_data_get_string(request_data, "message");
-    if (!msg || strcmp(msg, REQUEST_MSG) != 0)
-        return;
-
     std::string b64 = capture_program_output_as_base64_png();
     if (b64.empty()) {
         obs_data_set_bool(response_data, "success", false);
         return;
     }
 
-    // Fire a VendorEvent back to all websocket clients so the browser picks
-    // it up via obs.on('VendorEvent', ...) — same pattern as AdvancedSceneSwitcher
     obs_data_t *event_data = obs_data_create();
     obs_data_set_string(event_data, "message", b64.c_str());
-    obs_websocket_vendor_emit_event(vendor, "AdvancedSceneSwitcherMessage", event_data);
+    obs_websocket_vendor_emit_event(vendor, REQUEST_TYPE, event_data);
     obs_data_release(event_data);
 
     obs_data_set_bool(response_data, "success", true);
@@ -276,7 +269,7 @@ void obs_module_post_load(void)
     }
 
     bool ok = obs_websocket_vendor_register_request(
-        vendor, "AdvancedSceneSwitcherMessage", on_request, nullptr);
+        vendor, REQUEST_TYPE, on_request, nullptr);
 
     if (ok)
         blog(LOG_INFO, PLUGIN_LOG_TAG "Registered vendor request");
