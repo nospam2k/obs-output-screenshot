@@ -326,8 +326,8 @@ async function saveStreamKey() {
   if (key === saved) return
   setSetting('stream-key', key)
   await sendCommand('SetStreamServiceSettings', {
-    streamServiceType: 'rtmp_common',
-    streamServiceSettings: { service: 'YouTube - RTMP', server: 'primary', key }
+    streamServiceType: 'rtmp_custom',
+    streamServiceSettings: { server: 'rtmps://a.rtmps.youtube.com/live2', key }
   })
 }
 
