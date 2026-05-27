@@ -44,7 +44,23 @@ Copy `build\RelWithDebInfo\obs-output-screenshot.dll` to:
 %APPDATA%\obs-studio\plugins\obs-output-screenshot\bin\64bit\
 ```
 
-### CI (both platforms via GitHub Actions)
+### Linux
+
+Install OBS and its development headers, then:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DLIBOBS_INCLUDE_DIR=/usr/include/obs \
+  -DLIBOBS_LIB=/usr/lib/x86_64-linux-gnu/libobs.so
+cmake --build build
+```
+
+Copy `build/obs-output-screenshot.so` to:
+```
+~/.config/obs-studio/plugins/obs-output-screenshot/bin/64bit/
+```
+
+### CI (all platforms via GitHub Actions)
 
 Push a tag to trigger a release build:
 
@@ -53,7 +69,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-GitHub Actions will build macOS + Windows and attach zips to the release.
+GitHub Actions will build macOS + Windows + Linux and attach the archives to the release.
 
 ## Installation
 
@@ -73,6 +89,16 @@ GitHub Actions will build macOS + Windows and attach zips to the release.
 2. Extract and copy `obs-plugins\64bit\obs-output-screenshot.dll` to:
    ```
    %APPDATA%\obs-studio\obs-plugins\64bit\
+   ```
+3. Restart OBS.
+
+### Linux
+
+1. Download `obs-output-screenshot-linux.tar.gz` from the Releases page.
+2. Extract it into your OBS plugins directory:
+   ```sh
+   tar -xzf obs-output-screenshot-linux.tar.gz \
+     -C ~/.config/obs-studio/plugins/
    ```
 3. Restart OBS.
 
