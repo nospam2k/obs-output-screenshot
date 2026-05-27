@@ -18,7 +18,8 @@ if(DEFINED LIBOBS_INCLUDE_DIR)
     if(APPLE)
         # Symbols provided by OBS at load time; no link target needed.
         target_link_options(obs-output-screenshot PRIVATE -undefined dynamic_lookup)
-    elseif(WIN32 AND DEFINED LIBOBS_LIB)
+    elseif(DEFINED LIBOBS_LIB)
+        # Windows and Linux: link against the supplied libobs import library / .so
         target_link_libraries(obs-output-screenshot PRIVATE "${LIBOBS_LIB}")
     endif()
 else()
@@ -49,4 +50,8 @@ if(WIN32)
     install(TARGETS obs-output-screenshot LIBRARY DESTINATION obs-plugins/64bit)
 elseif(APPLE)
     install(TARGETS obs-output-screenshot LIBRARY DESTINATION obs-plugins/mac)
+elseif(UNIX)
+    # Linux user-plugin layout: ~/.config/obs-studio/plugins/<name>/bin/64bit/
+    install(TARGETS obs-output-screenshot LIBRARY
+            DESTINATION obs-output-screenshot/bin/64bit)
 endif()
