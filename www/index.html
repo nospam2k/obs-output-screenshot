@@ -322,8 +322,6 @@ function updateStreamUI() {
 async function saveStreamKey() {
   const key = el('stream-key').value.trim()
   if (!key) return
-  const saved = getSetting('stream-key')
-  if (key === saved) return
   setSetting('stream-key', key)
   await sendCommand('SetStreamServiceSettings', {
     streamServiceType: 'rtmp_custom',
